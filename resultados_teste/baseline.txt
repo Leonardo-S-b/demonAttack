@@ -1,0 +1,6 @@
+Comparacao com agente aleatorio
+Episodios do baseline: 1
+Fitness medio aleatorio: 0.00
+Melhor fitness aleatorio: 0.00
+Melhor fitness evoluido: 0.00
+Melhor fitness evoluido ponderado: 0.00
