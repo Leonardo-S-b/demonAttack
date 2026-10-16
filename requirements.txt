@@ -1,0 +1,4 @@
+gymnasium==1.4.0
+ale-py==0.12.1
+numpy==2.5.4
+matplotlib==3.11.2

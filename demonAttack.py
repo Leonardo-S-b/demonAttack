@@ -1,6 +1,7 @@
 import argparse
 import copy
 import csv
+import math
 import pickle
 import random
 from pathlib import Path
@@ -30,6 +31,8 @@ DIFICULDADE = 0
 TAXA_MUTACAO = 0.10
 INTENSIDADE_MUTACAO = 0.20
 NUM_ELITE = 3
+PENALIDADE_VIDA = 100.0
+METAS_PONTUACAO = ((200, 50), (500, 100), (1000, 200))
 
 EXPERIMENTOS = {
     "A": (0.01, 0.05),
@@ -39,6 +42,11 @@ EXPERIMENTOS = {
 
 MODOS_DISPONIVEIS = [1, 3, 5, 7]
 DIFICULDADES_DISPONIVEIS = [0, 1]
+
+
+def calcular_bonus_metas(pontuacao):
+    """Soma uma unica vez cada bonus cuja meta foi atingida na partida."""
+    return sum(bonus for meta, bonus in METAS_PONTUACAO if pontuacao >= meta)
 
 
 def calcular_peso_fase(modo, dificuldade):
@@ -86,30 +94,71 @@ def avaliar(
     render_mode=None,
     modo=MODO_JOGO,
     dificuldade=DIFICULDADE,
+    diagnostico=False,
+    penalidade_vida=PENALIDADE_VIDA,
+    retornar_detalhes=False,
+    usar_bonus_metas=True,
 ):
     """
     Executa um episodio no Demon Attack e retorna o fitness do agente.
 
     O ambiente nao informa diretamente a quantidade de inimigos eliminados.
-    Por isso, o fitness e a soma das recompensas/pontos obtidos no episodio.
+    Fitness = pontos do jogo + bonus das metas - penalidade por vidas perdidas.
+    agente=None usa a politica aleatoria com a mesma regra de avaliacao.
     """
+    if not math.isfinite(penalidade_vida) or penalidade_vida < 0:
+        raise ValueError("A penalidade por vida deve ser finita e nao negativa.")
     ambiente = criar_ambiente(
         render_mode=render_mode,
         modo=modo,
         dificuldade=dificuldade,
     )
-    estado, _ = ambiente.reset()
-    fitness = 0.0
+    estado, info = ambiente.reset()
+    pontuacao = 0.0
+    vidas_anteriores = info["lives"]
+    vidas_perdidas = 0
+    passos_executados = 0
+    terminado = truncado = False
 
     for _ in range(max_passos):
-        acao = agente.agir(estado)
-        estado, recompensa, terminado, truncado, _ = ambiente.step(acao)
-        fitness += recompensa
+        acao = ambiente.action_space.sample() if agente is None else agente.agir(estado)
+        estado, recompensa, terminado, truncado, info = ambiente.step(acao)
+        pontuacao += recompensa
+        vidas_atuais = info["lives"]
+        # Ganhar vidas nao devolve penalidades; perder a ultima vida tambem conta.
+        vidas_perdidas += max(0, vidas_anteriores - vidas_atuais)
+        vidas_anteriores = vidas_atuais
+        passos_executados += 1
 
         if terminado or truncado:
             break
 
     ambiente.close()
+    bonus_metas = calcular_bonus_metas(pontuacao) if usar_bonus_metas else 0
+    fitness = pontuacao + bonus_metas - penalidade_vida * vidas_perdidas
+    if diagnostico:
+        motivos = []
+        if terminado:
+            motivos.append("fim de jogo informado pelo Atari (terminated=True)")
+        if truncado:
+            motivos.append("limite do ambiente ALE/Gymnasium (truncated=True)")
+        if not motivos:
+            motivos.append("limite de passos definido por --max-passos")
+        print(f"Motivo do encerramento: {'; '.join(motivos)}")
+        print(f"Passos executados: {passos_executados} / {max_passos}")
+        print(f"Vidas restantes informadas pelo ALE: {info.get('lives', 'indisponivel')}")
+        print(f"Frames do episodio: {info.get('episode_frame_number', 'indisponivel')}")
+        print(f"Vidas perdidas: {vidas_perdidas}")
+        print(f"Bonus por metas: {bonus_metas:.2f}")
+        print(f"Penalidade total: {penalidade_vida * vidas_perdidas:.2f}")
+    if retornar_detalhes:
+        return {
+            "fitness": fitness,
+            "pontuacao": pontuacao,
+            "bonus_metas": bonus_metas,
+            "vidas_perdidas": vidas_perdidas,
+            "penalidade_vida": penalidade_vida,
+        }
     return fitness
 
 
@@ -118,42 +167,43 @@ def visualizar_agente(
     max_passos=MAX_PASSOS_EPISODIO,
     modo=MODO_JOGO,
     dificuldade=DIFICULDADE,
+    penalidade_vida=PENALIDADE_VIDA,
+    usar_bonus_metas=True,
 ):
     """
     Executa visualmente o melhor agente em uma janela do Atari.
     O agente continua recebendo a observacao pela RAM.
     """
-    recompensa_total = avaliar(
+    resultado = avaliar(
         agente,
         max_passos=max_passos,
         render_mode="human",
         modo=modo,
         dificuldade=dificuldade,
+        diagnostico=True,
+        penalidade_vida=penalidade_vida,
+        retornar_detalhes=True,
+        usar_bonus_metas=usar_bonus_metas,
     )
-    print(f"Pontuacao obtida na visualizacao: {recompensa_total:.2f}")
-    return recompensa_total
+    print(f"Pontuacao obtida na visualizacao: {resultado['pontuacao']:.2f}")
+    print(f"Fitness final na visualizacao: {resultado['fitness']:.2f}")
+    return resultado["fitness"]
 
 
 def avaliar_agente_aleatorio(
     max_passos=MAX_PASSOS_EPISODIO,
     modo=MODO_JOGO,
     dificuldade=DIFICULDADE,
+    penalidade_vida=PENALIDADE_VIDA,
+    retornar_detalhes=False,
+    usar_bonus_metas=True,
 ):
     """Baseline: executa um agente que escolhe acoes aleatorias."""
-    ambiente = criar_ambiente(modo=modo, dificuldade=dificuldade)
-    estado, _ = ambiente.reset()
-    fitness = 0.0
-
-    for _ in range(max_passos):
-        acao = ambiente.action_space.sample()
-        estado, recompensa, terminado, truncado, _ = ambiente.step(acao)
-        fitness += recompensa
-
-        if terminado or truncado:
-            break
-
-    ambiente.close()
-    return fitness
+    return avaliar(
+        None, max_passos=max_passos, modo=modo, dificuldade=dificuldade,
+        penalidade_vida=penalidade_vida, retornar_detalhes=retornar_detalhes,
+        usar_bonus_metas=usar_bonus_metas,
+    )
 
 
 def criar_populacao(tamanho=TAMANHO_POPULACAO):
@@ -222,6 +272,9 @@ def executar_experimento(
     max_passos,
     modo,
     dificuldade,
+    penalidade_vida=PENALIDADE_VIDA,
+    renderizar_geracoes=False,
+    usar_bonus_metas=True,
 ):
     populacao = criar_populacao(tamanho_populacao)
     historico = []
@@ -232,12 +285,21 @@ def executar_experimento(
 
     for geracao in range(num_geracoes):
         for agente in populacao:
-            agente.fitness = avaliar(
+            resultado = avaliar(
                 agente,
                 max_passos=max_passos,
                 modo=modo,
                 dificuldade=dificuldade,
+                penalidade_vida=penalidade_vida,
+                retornar_detalhes=True,
+                usar_bonus_metas=usar_bonus_metas,
             )
+            agente.fitness = resultado["fitness"]
+            agente.pontuacao = resultado["pontuacao"]
+            agente.bonus_metas = resultado["bonus_metas"]
+            agente.usar_bonus_metas = usar_bonus_metas
+            agente.vidas_perdidas = resultado["vidas_perdidas"]
+            agente.penalidade_vida = penalidade_vida
 
         valores = [agente.fitness for agente in populacao]
         melhor = max(valores)
@@ -266,6 +328,14 @@ def executar_experimento(
             "media": media,
             "media_ponderada": media_ponderada,
             "pior": pior,
+            "penalidade_vida": penalidade_vida,
+            "pontuacao_melhor_individuo": melhor_da_geracao.pontuacao,
+            "vidas_perdidas_melhor_individuo": melhor_da_geracao.vidas_perdidas,
+            "pontuacao_media": float(np.mean([a.pontuacao for a in populacao])),
+            "bonus_metas_ativo": usar_bonus_metas,
+            "bonus_metas_melhor_individuo": melhor_da_geracao.bonus_metas,
+            "bonus_metas_medio": float(np.mean([a.bonus_metas for a in populacao])),
+            "vidas_perdidas_media": float(np.mean([a.vidas_perdidas for a in populacao])),
         })
 
         print(
@@ -273,11 +343,29 @@ def executar_experimento(
             f"Modo {modo} | "
             f"Dificuldade {dificuldade} | "
             f"Geracao {geracao:03d} | "
-            f"Melhor: {melhor:.2f} | "
+            f"Melhor fitness: {melhor:.2f} | "
+            f"Pontos: {melhor_da_geracao.pontuacao:.2f} | "
+            f"Bonus metas: {melhor_da_geracao.bonus_metas:.2f} | "
+            f"Vidas perdidas: {melhor_da_geracao.vidas_perdidas} | "
             f"Ponderado: {melhor_ponderado:.2f} | "
             f"Media: {media:.2f} | "
             f"Pior: {pior:.2f}"
         )
+
+        if renderizar_geracoes:
+            print(
+                f"Visualizando o melhor da geracao {geracao:03d} "
+                f"do experimento {nome} (partida demonstrativa)."
+            )
+            # A demonstracao nao substitui o fitness usado na selecao ou no CSV.
+            visualizar_agente(
+                melhor_da_geracao,
+                max_passos=max_passos,
+                modo=modo,
+                dificuldade=dificuldade,
+                penalidade_vida=penalidade_vida,
+                usar_bonus_metas=usar_bonus_metas,
+            )
 
         populacao = nova_geracao(
             populacao,
@@ -303,6 +391,14 @@ def salvar_csv(historico, caminho_csv):
         "media",
         "media_ponderada",
         "pior",
+        "penalidade_vida",
+        "pontuacao_melhor_individuo",
+        "vidas_perdidas_melhor_individuo",
+        "pontuacao_media",
+        "bonus_metas_ativo",
+        "bonus_metas_melhor_individuo",
+        "bonus_metas_medio",
+        "vidas_perdidas_media",
     ]
 
     with caminho_csv.open("w", newline="", encoding="utf-8") as arquivo:
@@ -328,7 +424,7 @@ def gerar_grafico(historico, caminho_png):
 
     plt.title("Evolucao do fitness no Demon Attack")
     plt.xlabel("Geracao")
-    plt.ylabel("Fitness")
+    plt.ylabel("Fitness (pontos + bonus das metas - penalidades)")
     plt.grid(True, alpha=0.3)
     plt.legend()
     plt.tight_layout()
@@ -341,14 +437,22 @@ def salvar_baseline(
     melhor_evoluido,
     melhor_evoluido_ponderado,
     caminho_txt,
+    penalidade_vida=PENALIDADE_VIDA,
+    usar_bonus_metas=True,
 ):
     caminho_txt.parent.mkdir(parents=True, exist_ok=True)
-    media_baseline = float(np.mean(valores_baseline))
-    melhor_baseline = max(valores_baseline)
+    media_baseline = float(np.mean([r["fitness"] for r in valores_baseline]))
+    melhor_baseline = max(r["fitness"] for r in valores_baseline)
 
     with caminho_txt.open("w", encoding="utf-8") as arquivo:
         arquivo.write("Comparacao com agente aleatorio\n")
+        arquivo.write(f"Penalidade por vida (ambos os agentes): {penalidade_vida:.2f}\n")
+        arquivo.write("Fitness = pontos + bonus das metas - penalidade por vida * vidas perdidas\n")
+        arquivo.write(f"Metas (pontuacao, bonus): {METAS_PONTUACAO if usar_bonus_metas else ()}\n")
         arquivo.write(f"Episodios do baseline: {len(valores_baseline)}\n")
+        arquivo.write(f"Pontuacao media aleatoria: {np.mean([r['pontuacao'] for r in valores_baseline]):.2f}\n")
+        arquivo.write(f"Bonus medio por metas aleatorio: {np.mean([r['bonus_metas'] for r in valores_baseline]):.2f}\n")
+        arquivo.write(f"Media de vidas perdidas aleatoria: {np.mean([r['vidas_perdidas'] for r in valores_baseline]):.2f}\n")
         arquivo.write(f"Fitness medio aleatorio: {media_baseline:.2f}\n")
         arquivo.write(f"Melhor fitness aleatorio: {melhor_baseline:.2f}\n")
         arquivo.write(f"Melhor fitness evoluido: {melhor_evoluido:.2f}\n")
@@ -366,7 +470,12 @@ def salvar_resumo_melhor(melhor_info, caminho_txt):
         arquivo.write(f"Modo: {melhor_info['modo']}\n")
         arquivo.write(f"Dificuldade: {melhor_info['dificuldade']}\n")
         arquivo.write(f"Peso da fase: {melhor_info['peso_fase']:.2f}\n")
-        arquivo.write(f"Fitness bruto: {melhor_info['fitness_bruto']:.2f}\n")
+        arquivo.write(f"Pontuacao do jogo: {melhor_info['pontuacao']:.2f}\n")
+        arquivo.write(f"Bonus por metas: {melhor_info['bonus_metas']:.2f}\n")
+        arquivo.write(f"Metas (pontuacao, bonus): {METAS_PONTUACAO if melhor_info['usar_bonus_metas'] else ()}\n")
+        arquivo.write(f"Vidas perdidas: {melhor_info['vidas_perdidas']}\n")
+        arquivo.write(f"Penalidade por vida: {melhor_info['penalidade_vida']:.2f}\n")
+        arquivo.write(f"Fitness final (antes do peso da fase): {melhor_info['fitness_bruto']:.2f}\n")
         arquivo.write(
             f"Fitness ponderado: {melhor_info['fitness_ponderado']:.2f}\n"
         )
@@ -399,6 +508,14 @@ def parse_args():
     parser.add_argument("--geracoes", type=int, default=NUM_GERACOES)
     parser.add_argument("--max-passos", type=int, default=MAX_PASSOS_EPISODIO)
     parser.add_argument("--baseline-episodios", type=int, default=5)
+    parser.add_argument(
+        "--sem-bonus-metas", action="store_true",
+        help="Desativa os bonus por metas de pontuacao (ativos por padrao).",
+    )
+    parser.add_argument(
+        "--penalidade-vida", type=float, default=PENALIDADE_VIDA,
+        help="Pontos descontados do fitness por vida perdida (padrao: 100; 0 desativa).",
+    )
     parser.add_argument("--modo", type=int, default=MODO_JOGO, choices=MODOS_DISPONIVEIS)
     parser.add_argument(
         "--dificuldade",
@@ -415,11 +532,18 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--renderizar-melhor", action="store_true")
     parser.add_argument(
+        "--renderizar-geracoes", action="store_true",
+        help="Mostra uma partida do melhor individuo ao final de cada geracao.",
+    )
+    parser.add_argument(
         "--visualizar-arquivo",
         default=None,
         help="Carrega um agente salvo em .pkl e mostra a partida em uma janela.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+    if not math.isfinite(args.penalidade_vida) or args.penalidade_vida < 0:
+        parser.error("--penalidade-vida deve ser um numero finito maior ou igual a zero.")
+    return args
 
 
 def main():
@@ -437,6 +561,8 @@ def main():
             max_passos=args.max_passos,
             modo=args.modo,
             dificuldade=args.dificuldade,
+            penalidade_vida=args.penalidade_vida,
+            usar_bonus_metas=not args.sem_bonus_metas,
         )
         return
 
@@ -461,6 +587,9 @@ def main():
             max_passos=args.max_passos,
             modo=args.modo,
             dificuldade=args.dificuldade,
+            penalidade_vida=args.penalidade_vida,
+            retornar_detalhes=True,
+            usar_bonus_metas=not args.sem_bonus_metas,
         )
         for _ in range(args.baseline_episodios)
     ]
@@ -489,6 +618,9 @@ def main():
                 max_passos=args.max_passos,
                 modo=modo,
                 dificuldade=dificuldade,
+                penalidade_vida=args.penalidade_vida,
+                renderizar_geracoes=args.renderizar_geracoes,
+                usar_bonus_metas=not args.sem_bonus_metas,
             )
             historico_completo.extend(historico)
 
@@ -503,6 +635,11 @@ def main():
                     "peso_fase": calcular_peso_fase(modo, dificuldade),
                     "fitness_bruto": melhor_fitness,
                     "fitness_ponderado": melhor_fitness_ponderado,
+                    "pontuacao": melhor_agente.pontuacao,
+                    "bonus_metas": melhor_agente.bonus_metas,
+                    "usar_bonus_metas": not args.sem_bonus_metas,
+                    "vidas_perdidas": melhor_agente.vidas_perdidas,
+                    "penalidade_vida": args.penalidade_vida,
                 }
 
     salvar_csv(historico_completo, saida / "fitness.csv")
@@ -512,6 +649,8 @@ def main():
         melhor_fitness_geral,
         melhor_fitness_ponderado_geral,
         saida / "baseline.txt",
+        penalidade_vida=args.penalidade_vida,
+        usar_bonus_metas=not args.sem_bonus_metas,
     )
     salvar_resumo_melhor(melhor_info_geral, saida / "melhor_agente.txt")
     salvar_melhor_agente(melhor_agente_geral, saida / "melhor_agente.pkl")
@@ -526,8 +665,10 @@ def main():
         visualizar_agente(
             melhor_agente_geral,
             max_passos=args.max_passos,
-            modo=args.modo,
-            dificuldade=args.dificuldade,
+            modo=melhor_info_geral["modo"],
+            dificuldade=melhor_info_geral["dificuldade"],
+            penalidade_vida=args.penalidade_vida,
+            usar_bonus_metas=not args.sem_bonus_metas,
         )
 
 

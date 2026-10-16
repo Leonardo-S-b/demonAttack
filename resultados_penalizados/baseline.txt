@@ -1,0 +1,10 @@
+Comparacao com agente aleatorio
+Penalidade por vida (ambos os agentes): 100.00
+Fitness = pontos - penalidade por vida * vidas perdidas
+Episodios do baseline: 5
+Pontuacao media aleatoria: 233.00
+Media de vidas perdidas aleatoria: 4.40
+Fitness medio aleatorio: -207.00
+Melhor fitness aleatorio: -45.00
+Melhor fitness evoluido: 185.00
+Melhor fitness evoluido ponderado: 212.75

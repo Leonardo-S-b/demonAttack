@@ -1,0 +1,12 @@
+Melhor agente geral
+Experimento: C-m1-d0
+Modo: 1
+Dificuldade: 0
+Peso da fase: 1.15
+Pontuacao do jogo: 1900.00
+Bonus por metas: 350.00
+Metas (pontuacao, bonus): ((200, 50), (500, 100), (1000, 200))
+Vidas perdidas: 7
+Penalidade por vida: 100.00
+Fitness final (antes do peso da fase): 1550.00
+Fitness ponderado: 1782.50

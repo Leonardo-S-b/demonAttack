@@ -1,0 +1,6 @@
+Comparacao com agente aleatorio
+Episodios do baseline: 5
+Fitness medio aleatorio: 70.00
+Melhor fitness aleatorio: 100.00
+Melhor fitness evoluido: 2775.00
+Melhor fitness evoluido ponderado: 3191.25

@@ -1,0 +1,10 @@
+Melhor agente geral
+Experimento: B-m1-d0
+Modo: 1
+Dificuldade: 0
+Peso da fase: 1.15
+Pontuacao do jogo: 385.00
+Vidas perdidas: 2
+Penalidade por vida: 100.00
+Fitness penalizado (antes do peso da fase): 185.00
+Fitness ponderado: 212.75

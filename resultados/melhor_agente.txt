@@ -1,0 +1,7 @@
+Melhor agente geral
+Experimento: B-m1-d0
+Modo: 1
+Dificuldade: 0
+Peso da fase: 1.15
+Fitness bruto: 2775.00
+Fitness ponderado: 3191.25
